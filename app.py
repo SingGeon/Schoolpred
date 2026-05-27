@@ -15,7 +15,6 @@ import streamlit as st
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from data.generate_bac_data import genereaza_date_bac
 from database.mongodb_client import MongoDBClient
 from models.predictor import BACPredictor
 
@@ -30,32 +29,40 @@ st.set_page_config(
 CSV_PATH = os.path.join(os.path.dirname(__file__), "data", "bac_date_romania.csv")
 
 MATERII_LABEL = {
-    "nota_romana_oral": "Română Oral",
     "nota_romana_scris": "Română Scris",
-    "nota_matematica": "Matematică",
+    "nota_matematica": "Proba C",
     "nota_limba_straina": "Limbă Străină",
-    "nota_specialitate": "Specialitate",
+    "nota_specialitate": "Proba D",
 }
 MATERII = list(MATERII_LABEL.keys())
 CULORI_AN = px.colors.qualitative.Set2
 
 # ── Incarcare date ────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner="Se încarcă datele...")
-def load_data() -> pd.DataFrame:
-    if os.path.exists(CSV_PATH):
-        df = pd.read_csv(CSV_PATH, encoding="utf-8-sig")
-    else:
-        df = genereaza_date_bac(10000)
-        df.to_csv(CSV_PATH, index=False, encoding="utf-8-sig")
-    return df
-
-
 def get_mongo_client() -> MongoDBClient:
     if "mongo_client" not in st.session_state:
         client = MongoDBClient()
         client.connect()
         st.session_state.mongo_client = client
     return st.session_state.mongo_client
+
+
+@st.cache_data(show_spinner="Se încarcă datele reale BAC...")
+def load_data() -> pd.DataFrame:
+    mongo = get_mongo_client()
+    if mongo.is_connected:
+        df_mongo = mongo.get_all_data()
+        if df_mongo is not None and not df_mongo.empty:
+            return df_mongo
+        # MongoDB conectat dar fara date — incarca din CSV si insereaza
+        if os.path.exists(CSV_PATH):
+            df = pd.read_csv(CSV_PATH, encoding="utf-8-sig", low_memory=False)
+            mongo.insert_data(df)
+            return df
+    # Fallback CSV
+    if os.path.exists(CSV_PATH):
+        return pd.read_csv(CSV_PATH, encoding="utf-8-sig", low_memory=False)
+    st.error("Fisierul de date lipsa. Ruleaza: python data/process_real_data.py")
+    st.stop()
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -820,11 +827,10 @@ elif pagina == "🤖 Model ML":
             st.subheader("Importanța Feature-urilor")
             fi = predictor.get_feature_importance()
             fi_labels = {
-                "nota_romana_oral": "Română Oral",
-                "nota_romana_scris": "Română Scris",
-                "nota_matematica": "Matematică",
-                "nota_limba_straina": "Limbă Străină",
-                "nota_specialitate": "Specialitate",
+                "nota_romana_scris": "Română Scris (EA)",
+                "nota_matematica": "Proba C",
+                "nota_limba_straina": "Limbă Străină (EB)",
+                "nota_specialitate": "Proba D",
                 "mediu_encoded": "Mediu (Urban/Rural)",
                 "gen_encoded": "Gen",
                 "an": "An",
@@ -894,11 +900,10 @@ elif pagina == "🔮 Predicție":
         col1, col2 = st.columns(2)
 
         with col1:
-            nota_ro_oral = st.slider("Română Oral", 1.0, 10.0, 7.0, 0.1)
-            nota_ro_scris = st.slider("Română Scris", 1.0, 10.0, 6.5, 0.1)
-            nota_mat = st.slider("Matematică", 1.0, 10.0, 6.0, 0.1)
-            nota_ls = st.slider("Limbă Străină", 1.0, 10.0, 7.0, 0.1)
-            nota_spec = st.slider("Specialitate", 1.0, 10.0, 6.5, 0.1)
+            nota_ro_scris = st.slider("Română Scris (EA)", 1.0, 10.0, 6.5, 0.1)
+            nota_mat = st.slider("Proba C (Mat/Stiinte/Uman)", 1.0, 10.0, 6.0, 0.1)
+            nota_ls = st.slider("Limbă Străină (EB)", 1.0, 10.0, 7.0, 0.1)
+            nota_spec = st.slider("Proba D (Specialitate)", 1.0, 10.0, 6.5, 0.1)
 
         with col2:
             mediu = st.radio("Mediu", ["Urban", "Rural"])
@@ -907,13 +912,12 @@ elif pagina == "🔮 Predicție":
 
             st.divider()
             medie_calc = round(
-                nota_ro_oral * 0.1 + nota_ro_scris * 0.3 +
-                nota_mat * 0.3 + nota_ls * 0.15 + nota_spec * 0.15, 2
+                nota_ro_scris * 0.4 + nota_mat * 0.3 +
+                nota_ls * 0.15 + nota_spec * 0.15, 2
             )
-            st.metric("Medie calculată", medie_calc)
+            st.metric("Medie estimată", medie_calc)
 
         features = {
-            "nota_romana_oral": nota_ro_oral,
             "nota_romana_scris": nota_ro_scris,
             "nota_matematica": nota_mat,
             "nota_limba_straina": nota_ls,
@@ -1059,7 +1063,7 @@ elif pagina == "⚡ Live Dashboard":
     # Tabel ultimii elevi procesati
     if len(live_df) > 0:
         st.subheader("Ultimii Elevi Procesați")
-        ultimii = live_df.tail(15).copy()[::-1]
+        ultimii = live_df[["timp", "judet", "mediu", "medie", "promovat", "gen"]].tail(15).copy()[::-1]
         ultimii["promovat"] = ultimii["promovat"].map({1: "✅ Promovat", 0: "❌ Respins"})
         ultimii["medie"] = ultimii["medie"].round(2)
         ultimii.columns = ["Timp", "Județ", "Mediu", "Medie", "Rezultat", "Gen"]

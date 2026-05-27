@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional, Tuple
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     accuracy_score, classification_report, confusion_matrix,
     mean_absolute_error, r2_score
@@ -24,7 +25,6 @@ CLASSIFIER_PATH = os.path.join(SAVED_DIR, "classifier.joblib")
 REGRESSOR_PATH = os.path.join(SAVED_DIR, "regressor.joblib")
 
 FEATURES = [
-    "nota_romana_oral",
     "nota_romana_scris",
     "nota_matematica",
     "nota_limba_straina",
@@ -54,6 +54,7 @@ class BACPredictor:
         )
         self.le_mediu = LabelEncoder()
         self.le_gen = LabelEncoder()
+        self.imputer = SimpleImputer(strategy="median")
         self._trained = False
         self.accuracy: Optional[float] = None
         self.class_report: Optional[str] = None
@@ -80,9 +81,11 @@ class BACPredictor:
         # Excludem absenti pentru antrenare
         df_train = df_proc[df_proc["absent"] == 0].copy()
 
-        X = df_train[FEATURES].values
-        y_class = df_train["promovat"].values
-        y_reg = df_train["medie_generala"].values
+        df_train = df_train.dropna(subset=["promovat", "medie_generala"])
+        X_raw = df_train[FEATURES].values
+        X = self.imputer.fit_transform(X_raw)
+        y_class = df_train["promovat"].values.astype(int)
+        y_reg = df_train["medie_generala"].values.astype(float)
 
         X_train, X_test, y_class_train, y_class_test, y_reg_train, y_reg_test = \
             train_test_split(X, y_class, y_reg, test_size=0.2, random_state=42, stratify=y_class)
@@ -154,17 +157,16 @@ class BACPredictor:
         except ValueError:
             gen_enc = 0
 
-        row = [
-            features.get("nota_romana_oral", 5.0),
-            features.get("nota_romana_scris", 5.0),
-            features.get("nota_matematica", 5.0),
-            features.get("nota_limba_straina", 5.0),
-            features.get("nota_specialitate", 5.0),
+        row_raw = np.array([[
+            features.get("nota_romana_scris", np.nan),
+            features.get("nota_matematica", np.nan),
+            features.get("nota_limba_straina", np.nan),
+            features.get("nota_specialitate", np.nan),
             mediu_enc,
             gen_enc,
             features.get("an", 2024)
-        ]
-        return row
+        ]])
+        return self.imputer.transform(row_raw)[0].tolist()
 
     def get_feature_importance(self) -> Optional[Dict[str, float]]:
         return self.feature_importances_
@@ -180,6 +182,7 @@ class BACPredictor:
                 "regressor": self.regressor,
                 "le_mediu": self.le_mediu,
                 "le_gen": self.le_gen,
+                "imputer": self.imputer,
                 "accuracy": self.accuracy,
                 "mae": self.mae,
                 "r2": self.r2,
@@ -201,6 +204,7 @@ class BACPredictor:
             self.regressor = data["regressor"]
             self.le_mediu = data["le_mediu"]
             self.le_gen = data["le_gen"]
+            self.imputer = data.get("imputer", SimpleImputer(strategy="median"))
             self.accuracy = data.get("accuracy")
             self.mae = data.get("mae")
             self.r2 = data.get("r2")

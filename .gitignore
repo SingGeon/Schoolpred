@@ -1,0 +1,16 @@
+# Date brute (prea mari pentru GitHub - se descarca cu process_real_data.py)
+data/raw/
+data/bac_date_romania.csv
+
+# Modele ML salvate
+models/saved/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.env
+
+# Fisiere temporare
+c
